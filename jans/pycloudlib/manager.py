@@ -15,6 +15,7 @@ from jans.pycloudlib.config import ConsulConfig
 from jans.pycloudlib.config import KubernetesConfig
 from jans.pycloudlib.secret import KubernetesSecret
 from jans.pycloudlib.secret import VaultSecret
+from jans.pycloudlib.secret import GoogleSecret
 from jans.pycloudlib.utils import decode_text
 from jans.pycloudlib.utils import encode_text
 
@@ -26,6 +27,7 @@ class ConfigManager:
 
     - :class:`~jans.pycloudlib.config.consul_config.ConsulConfig`
     - :class:`~jans.pycloudlib.config.kubernetes_config.KubernetesConfig`
+    - :class:`~jans.pycloudlib.secret.google_secret.GoogleSecret`
     """
     def __init__(self):
         _adapter = os.environ.get("CN_CONFIG_ADAPTER", "consul",)
@@ -33,6 +35,8 @@ class ConfigManager:
             self.adapter = ConsulConfig()
         elif _adapter == "kubernetes":
             self.adapter = KubernetesConfig()
+        elif _adapter == "google":
+            self.adapter = GoogleSecret(configuration=True)
         else:
             self.adapter = None
 
@@ -69,6 +73,7 @@ class SecretManager:
 
     - :class:`~jans.pycloudlib.secret.vault_secret.VaultSecret`
     - :class:`~jans.pycloudlib.secret.kubernetes_secret.KubernetesSecret`
+    - :class:`~jans.pycloudlib.secret.google_secret.GoogleSecret`
     """
 
     def __init__(self):
@@ -77,6 +82,8 @@ class SecretManager:
             self.adapter = VaultSecret()
         elif _adapter == "kubernetes":
             self.adapter = KubernetesSecret()
+        elif _adapter == "google":
+            self.adapter = GoogleSecret()
         else:
             self.adapter = None
 
