@@ -1,6 +1,6 @@
 """
 jans.pycloudlib.secret.google_secret
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This module contains secret adapter class to interact with
 Google Secret.
@@ -11,17 +11,19 @@ import sys
 import os
 import json
 import logging
-from binascii import hexlify, unhexlify
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.exceptions import InvalidTag
-from typing import Any
-
-from google.cloud import secretmanager
-from google.api_core.exceptions import AlreadyExists, NotFound
-from jans.pycloudlib.secret.base_secret import BaseSecret
-from jans.pycloudlib.utils import safe_value
 import lzma
 import zlib
+from binascii import hexlify, unhexlify
+from typing import Any
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
+from google.cloud import secretmanager
+from google.api_core.exceptions import AlreadyExists, NotFound
+
+from jans.pycloudlib.secret.base_secret import BaseSecret
+from jans.pycloudlib.utils import safe_value
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,7 +39,7 @@ class GoogleSecret(BaseSecret):
     - ``CN_SECRET_GOOGLE_SECRET``
     """
 
-    def __init__(self, configuration=False):
+    def __init__(self):
         self.project_id = os.getenv("GOOGLE_PROJECT_ID")
         self.version_id = os.getenv("CN_GOOGLE_SECRET_VERSION_ID", "latest")
         self.salt = os.urandom(16)
@@ -87,7 +89,10 @@ class GoogleSecret(BaseSecret):
             logger.error("Wrong passphrase used.")
         return plaintext.decode("utf8")
 
-    def all(self) -> dict:
+    def all(self) -> dict:  # pragma: no cover
+        return self.get_all()
+
+    def get_all(self) -> dict:
         """
         Access the payload for the given secret version if one exists. The version
         can be a version number as a string (e.g. "5") or an alias (e.g. "latest").
@@ -118,7 +123,7 @@ class GoogleSecret(BaseSecret):
         :params default: Default value if key is not exist.
         :returns: Value based on given key or default one.
         """
-        result = self.all()
+        result = self.get_all()
         return result.get(key) or default
 
     def set(self, key: str, value: Any) -> bool:
@@ -128,26 +133,26 @@ class GoogleSecret(BaseSecret):
         :params value: Value of the key.
         :returns: A ``bool`` to mark whether config is set or not.
         """
-        all = self.all()
-        all[key] = safe_value(value)
-        secret = self.create_secret()
-        logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all))} bytes')
+        all_ = self.get_all()
+        all_[key] = safe_value(value)
+        _ = self.create_secret()
+        logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all_))} bytes')
         secret_version_bool = self.add_secret_version(
-            self._encrypt(safe_value(all)))
+            self._encrypt(safe_value(all_)))
         return secret_version_bool
 
-    def set_all(self, data: dict = None) -> bool:
+    def set_all(self, data: dict) -> bool:
         """Push a full dictionary to secrets.
         :params data full dictionary to push. Used in initial creation of config and secret
         :returns: A ``bool`` to mark whether config is set or not.
         """
-        all = {}
+        all_ = {}
         for k, v in data.items():
-            all[k] = safe_value(v)
-        secret = self.create_secret()
-        logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all))} bytes')
+            all_[k] = safe_value(v)
+        _ = self.create_secret()
+        logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all_))} bytes')
         secret_version_bool = self.add_secret_version(
-            self._encrypt(safe_value(all)))
+            self._encrypt(safe_value(all_)))
         return secret_version_bool
 
     def create_secret(self) -> bool:
