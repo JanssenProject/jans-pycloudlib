@@ -1,31 +1,26 @@
 """
-jans.pycloudlib.secret.google_secret
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+jans.pycloudlib.config.google_config
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This module contains secret adapter class to interact with
+This module contains config adapter class to interact with
 Google Secret.
 """
 
-import hashlib
+from jans.pycloudlib.secret.google_secret import GoogleSecret
 import sys
+import logging
 import os
 import json
-import logging
-from binascii import hexlify, unhexlify
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.exceptions import InvalidTag
 from typing import Any
 
 from google.cloud import secretmanager
 from google.api_core.exceptions import AlreadyExists, NotFound
-from jans.pycloudlib.secret.base_secret import BaseSecret
 from jans.pycloudlib.utils import safe_value
-import lzma
-import zlib
+
 logger = logging.getLogger(__name__)
 
 
-class GoogleSecret(BaseSecret):
+class GoogleConfig(GoogleSecret):
     """This class interacts with Google Secret backend.
 
     The following environment variables are used to instantiate the client:
@@ -40,52 +35,10 @@ class GoogleSecret(BaseSecret):
     def __init__(self, configuration=False):
         self.project_id = os.getenv("GOOGLE_PROJECT_ID")
         self.version_id = os.getenv("CN_GOOGLE_SECRET_VERSION_ID", "latest")
-        self.salt = os.urandom(16)
-        self.passphrase = os.getenv("CN_GOOGLE_SECRET_MANAGER_PASSPHRASE", "secret")
         # secrets key value by default
-        self.google_secret_name = os.getenv("CN_SECRET_GOOGLE_SECRET", "jans") + "-secret"
+        self.google_secret_name = os.getenv("CN_SECRET_GOOGLE_SECRET", "jans") + "-configuration"
         # Create the Secret Manager client.
         self.client = secretmanager.SecretManagerServiceClient()
-        self.key = self._set_key()
-
-    def _set_key(self) -> bytes:
-        """
-        Return key for for encrypting and decrypting payload
-        :return: key
-        """
-        return hashlib.pbkdf2_hmac("sha256", self.passphrase.encode("utf8"), self.salt, 1000)
-
-    def _encrypt(self, plaintext: str) -> str:
-        """
-        Encrypt payload
-        :oarans plaintext: plain string to encrypt
-        :return: A string including salr, iv, and encrypted payload
-        """
-        aes = AESGCM(self.key)
-        iv = os.urandom(16)
-        plaintext = plaintext.encode("utf8")
-        plaintext = lzma.compress(plaintext)
-        ciphertext = aes.encrypt(iv, plaintext, None)
-        logger.info(f'Size of encrypted secret payload : {sys.getsizeof(ciphertext)} bytes')
-        return "%s-%s-%s" % (
-            hexlify(self.salt).decode("utf8"), hexlify(iv).decode("utf8"), hexlify(ciphertext).decode("utf8"))
-
-    def _decrypt(self, ciphertext: str) -> str:
-        """
-        Decrypt payload
-        :params ciphertext: encrypted string to decrypt
-        :return: decrypted payload
-        """
-        self.salt, iv, ciphertext = map(unhexlify, ciphertext.split("-"))
-        self.key = self._set_key()
-        aes = AESGCM(self.key)
-        plaintext = ""
-        try:
-            plaintext = aes.decrypt(iv, ciphertext, None)
-            plaintext = lzma.decompress(plaintext)
-        except InvalidTag:
-            logger.error("Wrong passphrase used.")
-        return plaintext.decode("utf8")
 
     def all(self) -> dict:
         """
@@ -102,38 +55,29 @@ class GoogleSecret(BaseSecret):
                 # Access the secret version.
                 response = self.client.access_secret_version(request={"name": name})
                 logger.info(f"Secret {self.google_secret_name} has been found. Accessing version {self.version_id}.")
-                payload = zlib.decompress(response.payload.data).decode("UTF-8")
-                data = json.loads(self._decrypt(payload))
+                payload = response.payload.data.decode("UTF-8")
+                data = json.loads(payload)
                 retry = False
             except NotFound:
                 logger.warning("Secret may not exist or have any versions created")
                 self.create_secret()
-                self.add_secret_version(self._encrypt(safe_value({})))
+                self.add_secret_version(safe_value({}))
 
         return data
-
-    def get(self, key, default: Any = None) -> Any:
-        """Get value based on given key.
-        :params key: Key name.
-        :params default: Default value if key is not exist.
-        :returns: Value based on given key or default one.
-        """
-        result = self.all()
-        return result.get(key) or default
 
     def set(self, key: str, value: Any) -> bool:
         """Set key with given value.
 
         :params key: Key name.
         :params value: Value of the key.
+        :params data full dictionary to push. Used in initial creation of config and secret
         :returns: A ``bool`` to mark whether config is set or not.
         """
         all = self.all()
         all[key] = safe_value(value)
         secret = self.create_secret()
         logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all))} bytes')
-        secret_version_bool = self.add_secret_version(
-            self._encrypt(safe_value(all)))
+        secret_version_bool = self.add_secret_version(safe_value(all))
         return secret_version_bool
 
     def set_all(self, data: dict = None) -> bool:
@@ -146,8 +90,7 @@ class GoogleSecret(BaseSecret):
             all[k] = safe_value(v)
         secret = self.create_secret()
         logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all))} bytes')
-        secret_version_bool = self.add_secret_version(
-            self._encrypt(safe_value(all)))
+        secret_version_bool = self.add_secret_version(safe_value(all))
         return secret_version_bool
 
     def create_secret(self) -> bool:
@@ -179,7 +122,7 @@ class GoogleSecret(BaseSecret):
     def add_secret_version(self, payload: str) -> bool:
         """
         Add a new secret version to the given secret with the provided payload.
-        :params payload: encrypted payload
+        :params payload:  payload
         """
 
         # Build the resource name of the parent secret.
@@ -187,8 +130,8 @@ class GoogleSecret(BaseSecret):
 
         # Convert the string payload into a bytes. This step can be omitted if you
         # pass in bytes instead of a str for the payload argument.
-        payload = zlib.compress(payload.encode("UTF-8"))
-        logger.info(f'Size of final compressed secret payload : {sys.getsizeof(payload)} bytes')
+        payload = payload.encode("UTF-8")
+
         # Add the secret version.
         response = self.client.add_secret_version(
             request={"parent": parent, "payload": {"data": payload}}
@@ -196,16 +139,3 @@ class GoogleSecret(BaseSecret):
 
         logger.info("Added secret version: {}".format(response.name))
         return bool(response)
-
-    def delete(self) -> None:
-        """
-        Delete the secret with the given name and all of its versions.
-        """
-        # Build the resource name of the secret.
-        name = self.client.secret_path(self.project_id, self.google_secret_name)
-
-        try:
-            # Delete the secret.
-            self.client.delete_secret(request={"name": name})
-        except NotFound:
-            logger.warning(f'Secret {self.google_secret_name} does not exist in the secret manager.')

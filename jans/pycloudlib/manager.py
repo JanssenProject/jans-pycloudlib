@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 from jans.pycloudlib.config import ConsulConfig
 from jans.pycloudlib.config import KubernetesConfig
+from jans.pycloudlib.config import GoogleConfig
 from jans.pycloudlib.secret import KubernetesSecret
 from jans.pycloudlib.secret import VaultSecret
 from jans.pycloudlib.secret import GoogleSecret
@@ -27,7 +28,7 @@ class ConfigManager:
 
     - :class:`~jans.pycloudlib.config.consul_config.ConsulConfig`
     - :class:`~jans.pycloudlib.config.kubernetes_config.KubernetesConfig`
-    - :class:`~jans.pycloudlib.secret.google_secret.GoogleSecret`
+    - :class:`~jans.pycloudlib.secret.google_config.GoogleConfig`
     """
     def __init__(self):
         _adapter = os.environ.get("CN_CONFIG_ADAPTER", "consul",)
@@ -36,7 +37,7 @@ class ConfigManager:
         elif _adapter == "kubernetes":
             self.adapter = KubernetesConfig()
         elif _adapter == "google":
-            self.adapter = GoogleSecret(configuration=True)
+            self.adapter = GoogleConfig()
         else:
             self.adapter = None
 
