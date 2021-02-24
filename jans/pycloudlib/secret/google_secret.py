@@ -35,7 +35,7 @@ class GoogleSecret(BaseSecret):
     - ``GOOGLE_APPLICATION_CREDENTIALS`` json file that should be injected in upstream images
     - ``GOOGLE_PROJECT_ID``
     - ``CN_SECRET_GOOGLE_SECRET_VERSION_ID``
-    - ``CN_GOOGLE_SECRET_MANAGER_PASSPHRASE``
+    - ``CN_SECRET_GOOGLE_SECRET_MANAGER_PASSPHRASE``
     - ``CN_SECRET_GOOGLE_SECRET_NAME_PREFIX``
     """
 
@@ -43,7 +43,7 @@ class GoogleSecret(BaseSecret):
         self.project_id = os.getenv("GOOGLE_PROJECT_ID")
         self.version_id = os.getenv("CN_SECRET_GOOGLE_SECRET_VERSION_ID", "latest")
         self.salt = os.urandom(16)
-        self.passphrase = os.getenv("CN_GOOGLE_SECRET_MANAGER_PASSPHRASE", "secret")
+        self.passphrase = os.getenv("CN_SECRET_GOOGLE_SECRET_MANAGER_PASSPHRASE", "secret")
         # secrets key value by default
         self.google_secret_name = os.getenv("CN_SECRET_GOOGLE_SECRET_NAME_PREFIX", "jans") + "-secret"
         # Create the Secret Manager client.
@@ -98,23 +98,31 @@ class GoogleSecret(BaseSecret):
         can be a version number as a string (e.g. "5") or an alias (e.g. "latest").
         :returns: A ``dict`` of key-value pairs (if any)
         """
+        # Try to get the latest resource name. Used in initialization. If the latest version doesn't exist
+        # its a state where the secret and initial version must be created
+        name = f"projects/{self.project_id}/secrets/{self.google_secret_name}/versions/latest"
+        try:
+            self.client.access_secret_version(request={"name": name})
+        except NotFound:
+            logger.warning("Secret may not exist or have any versions created yet")
+            self.create_secret()
+            self.add_secret_version(self._encrypt(safe_value({})))
         # Build the resource name of the secret version.
         name = f"projects/{self.project_id}/secrets/{self.google_secret_name}/versions/{self.version_id}"
         data = {}
-        retry = True
-        while retry:
-            try:
-                # Access the secret version.
-                response = self.client.access_secret_version(request={"name": name})
-                logger.info(f"Secret {self.google_secret_name} has been found. Accessing version {self.version_id}.")
-                payload = zlib.decompress(response.payload.data).decode("UTF-8")
-                data = json.loads(self._decrypt(payload))
-                retry = False
-            except NotFound:
-                logger.warning("Secret may not exist or have any versions created")
-                self.create_secret()
-                self.add_secret_version(self._encrypt(safe_value({})))
-
+        try:
+            # Access the secret version.
+            response = self.client.access_secret_version(request={"name": name})
+            logger.info(f"Secret {self.google_secret_name} has been found. Accessing version {self.version_id}.")
+            payload = zlib.decompress(response.payload.data).decode("UTF-8")
+            data = json.loads(self._decrypt(payload))
+        except NotFound:
+            logger.warning("Secret may not exist or have any versions created. "
+                           "Make sure CN_SECRET_GOOGLE_SECRET_VERSION_ID, and "
+                           "CN_SECRET_GOOGLE_SECRET_NAME_PREFIX are set correctly. "
+                           "In Google secrets manager, "
+                           "a secret with the name jans-secret would have CN_SECRET_GOOGLE_SECRET_NAME_PREFIX"
+                           " set to jans.")
         return data
 
     def get(self, key, default: Any = None) -> Any:
@@ -136,6 +144,7 @@ class GoogleSecret(BaseSecret):
         all_ = self.get_all()
         all_[key] = safe_value(value)
         _ = self.create_secret()
+        logger.info(f'Adding key {key} to google secret manager')
         logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all_))} bytes')
         secret_version_bool = self.add_secret_version(
             self._encrypt(safe_value(all_)))

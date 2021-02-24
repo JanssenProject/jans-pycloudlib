@@ -49,22 +49,31 @@ class GoogleConfig(BaseConfig):
         can be a version number as a string (e.g. "5") or an alias (e.g. "latest").
         :returns: A ``dict`` of key-value pairs (if any)
         """
+        # Try to get the latest resource name. Used in initialization. If the latest version doesn't exist
+        # its a state where the secret and initial version must be created
+        name = f"projects/{self.project_id}/secrets/{self.google_secret_name}/versions/latest"
+        try:
+            self.client.access_secret_version(request={"name": name})
+        except NotFound:
+            logger.warning("Secret may not exist or have any versions created yet")
+            self.create_secret()
+            self.add_secret_version(safe_value({}))
         # Build the resource name of the secret version.
         name = f"projects/{self.project_id}/secrets/{self.google_secret_name}/versions/{self.version_id}"
         data = {}
-        retry = True
-        while retry:
-            try:
-                # Access the secret version.
-                response = self.client.access_secret_version(request={"name": name})
-                logger.info(f"Secret {self.google_secret_name} has been found. Accessing version {self.version_id}.")
-                payload = response.payload.data.decode("UTF-8")
-                data = json.loads(payload)
-                retry = False
-            except NotFound:
-                logger.warning("Secret may not exist or have any versions created")
-                self.create_secret()
-                self.add_secret_version(safe_value({}))
+        try:
+            # Access the secret version.
+            response = self.client.access_secret_version(request={"name": name})
+            logger.info(f"Secret {self.google_secret_name} has been found. Accessing version {self.version_id}.")
+            payload = response.payload.data.decode("UTF-8")
+            data = json.loads(payload)
+        except NotFound:
+            logger.warning("Secret may not exist or have any versions created. "
+                           "Make sure CN_SECRET_GOOGLE_SECRET_VERSION_ID, and "
+                           "CN_SECRET_GOOGLE_SECRET_NAME_PREFIX are set correctly. "
+                           "In Google secrets manager, "
+                           "a secret with the name jans-secret would have CN_SECRET_GOOGLE_SECRET_NAME_PREFIX"
+                           " set to jans.")
 
         return data
 
@@ -88,8 +97,10 @@ class GoogleConfig(BaseConfig):
         all_ = self.get_all()
         all_[key] = safe_value(value)
         _ = self.create_secret()
+        logger.info(f'Adding key {key} to google secret manager')
         logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all_))} bytes')
         secret_version_bool = self.add_secret_version(safe_value(all_))
+        logger.info(secret_version_bool)
         return secret_version_bool
 
     def set_all(self, data: dict) -> bool:
