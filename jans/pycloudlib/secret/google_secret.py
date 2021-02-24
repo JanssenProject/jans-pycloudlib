@@ -34,18 +34,18 @@ class GoogleSecret(BaseSecret):
 
     - ``GOOGLE_APPLICATION_CREDENTIALS`` json file that should be injected in upstream images
     - ``GOOGLE_PROJECT_ID``
-    - ``CN_GOOGLE_SECRET_VERSION_ID``
+    - ``CN_SECRET_GOOGLE_SECRET_VERSION_ID``
     - ``CN_GOOGLE_SECRET_MANAGER_PASSPHRASE``
-    - ``CN_SECRET_GOOGLE_SECRET``
+    - ``CN_SECRET_GOOGLE_SECRET_NAME_PREFIX``
     """
 
     def __init__(self):
         self.project_id = os.getenv("GOOGLE_PROJECT_ID")
-        self.version_id = os.getenv("CN_GOOGLE_SECRET_VERSION_ID", "latest")
+        self.version_id = os.getenv("CN_SECRET_GOOGLE_SECRET_VERSION_ID", "latest")
         self.salt = os.urandom(16)
         self.passphrase = os.getenv("CN_GOOGLE_SECRET_MANAGER_PASSPHRASE", "secret")
         # secrets key value by default
-        self.google_secret_name = os.getenv("CN_SECRET_GOOGLE_SECRET", "jans") + "-secret"
+        self.google_secret_name = os.getenv("CN_SECRET_GOOGLE_SECRET_NAME_PREFIX", "jans") + "-secret"
         # Create the Secret Manager client.
         self.client = secretmanager.SecretManagerServiceClient()
         self.key = self._set_key()
