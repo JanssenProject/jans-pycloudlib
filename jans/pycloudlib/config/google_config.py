@@ -100,7 +100,6 @@ class GoogleConfig(BaseConfig):
         logger.info(f'Adding key {key} to google secret manager')
         logger.info(f'Size of secret payload : {sys.getsizeof(safe_value(all_))} bytes')
         secret_version_bool = self.add_secret_version(safe_value(all_))
-        logger.info(secret_version_bool)
         return secret_version_bool
 
     def set_all(self, data: dict) -> bool:
