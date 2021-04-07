@@ -24,5 +24,5 @@ PERSISTENCE_LDAP_MAPPINGS = (
 # Supported SQL dialects
 PERSISTENCE_SQL_DIALECTS = (
     "mysql",
-    # "pgsql",
+    "pgsql",
 )
