@@ -3,7 +3,25 @@ import logging
 import os
 
 from sqlalchemy import create_engine
+from sqlalchemy import MetaData
+from sqlalchemy import VARCHAR
+from sqlalchemy import TEXT
+from sqlalchemy import INT
+from sqlalchemy import SMALLINT
+from sqlalchemy import TIMESTAMP
+from sqlalchemy import JSON
+from sqlalchemy import BLOB
+from sqlalchemy import BINARY
+from sqlalchemy import Table
+from sqlalchemy import Column
+from sqlalchemy import text
+from sqlalchemy.dialects.mysql import DATETIME
+from sqlalchemy.dialects.mysql import TINYTEXT
+from sqlalchemy.dialects.postgresql import BYTEA
 from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.schema import CreateIndex
+from sqlalchemy.schema import Index
 
 from jans.pycloudlib.utils import encode_text
 
@@ -25,17 +43,6 @@ def get_sql_password() -> str:
 
 
 def get_type_obj(type_, size=None):
-    from sqlalchemy import VARCHAR
-    from sqlalchemy import TEXT
-    from sqlalchemy import INT
-    from sqlalchemy import SMALLINT
-    from sqlalchemy import TIMESTAMP
-    from sqlalchemy import JSON
-    from sqlalchemy import BLOB
-    from sqlalchemy import BINARY
-    from sqlalchemy.dialects.postgresql import BYTEA
-    from sqlalchemy.dialects.mysql import DATETIME
-
     if type_ == "VARCHAR":
         obj = VARCHAR(size)
     elif type_ == "TEXT":
@@ -56,6 +63,8 @@ def get_type_obj(type_, size=None):
         obj = BYTEA
     elif type_ == "DATETIME":
         obj = DATETIME(fsp=size)
+    elif type_ == "TINYTEXT":
+        obj = TINYTEXT
     return obj
 
 
@@ -64,8 +73,6 @@ class SQLClient:
     """
 
     def __init__(self):
-        from sqlalchemy import MetaData
-
         dialect = os.environ.get("CN_SQL_DB_DIALECT", "mysql")
         host = os.environ.get("CN_SQL_DB_HOST", "localhost")
         port = os.environ.get("CN_SQL_DB_PORT", 3306)
@@ -83,7 +90,7 @@ class SQLClient:
             pool_pre_ping=True,
             hide_parameters=True,
         )
-        self.metadata = MetaData()
+        self.metadata = MetaData(bind=self.engine, reflect=True)
 
     def is_alive(self):
         """Check whether connection is alive by executing simple query.
@@ -95,13 +102,11 @@ class SQLClient:
         return False
 
     def create_table(self, table_name, columns_mapping, pk):
-        from sqlalchemy.schema import CreateTable
-        from sqlalchemy import Table
-        from sqlalchemy import Column
-
         cols = []
+
         for column_name, data_type in columns_mapping.items():
             types = data_type.split("(")
+
             if len(types) == 2:
                 type_ = types[0]
                 size = int(types[1].strip("()"))
@@ -111,19 +116,57 @@ class SQLClient:
 
             is_pkey = bool(column_name == pk)
             type_obj = get_type_obj(type_, size)
-            cols.append(
-                Column(column_name, type_obj, primary_key=is_pkey)
-            )
+            cols.append(Column(column_name, type_obj, primary_key=is_pkey))
 
-        table = Table(table_name, self.metadata, *cols)
+        table = Table(
+            table_name,
+            self.metadata,
+            *cols,
+            extend_existing=True
+        )
+
+        try:
+            table.create(self.engine)
+        except (ProgrammingError, OperationalError) as exc:
+            dialect = self.engine.dialect.name
+
+            if dialect == "postgresql" and exc.orig.pgcode in ["42P07"]:
+                # error with following code will be suppressed
+                # - 42P07: relation exists
+                pass
+            elif dialect == "mysql" and exc.orig.args[0] in [1050]:
+                # error with following code will be suppressed
+                # - 1050: table exists
+                pass
+            else:
+                logger.warning(f"Unable to create table {table_name}; reason={exc}")
+
+    def get_table(self, table_name):
+        return self.metadata.tables.get(table_name)
+
+    def create_index(self, name, column):
+        index = Index(name, column)
+
         with self.engine.connect() as conn:
             try:
-                conn.execute(CreateTable(table))
-            except ProgrammingError as exc:
-                if self.engine.dialect.name == "postgresql" and exc.orig.pgcode in ["42P07"]:
+                conn.execute(CreateIndex(index))
+            except (ProgrammingError, OperationalError) as exc:
+                dialect = self.engine.dialect.name
+
+                if dialect == "postgresql" and exc.orig.pgcode in ["42P07"]:
                     # error with following code will be suppressed
-                    # - 42P07: table exists
+                    # - 42P07: relation exists
                     pass
+                elif dialect == "mysql" and exc.orig.args[0] in [1061]:
+                    # error with following code will be suppressed
+                    # - 1061: duplicate key name (index)
+                    pass
+                else:
+                    logger.warning(f"Unable to create index {name}; reason={exc}")
+
+    def raw_query(self, query, **prepared_data):
+        with self.engine.connect() as conn:
+            conn.execute(text(query), **prepared_data)
 
 
 def render_sql_properties(manager, src: str, dest: str) -> None:
