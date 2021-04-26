@@ -97,9 +97,8 @@ class SQLClient:
         """
 
         with self.engine.connect() as conn:
-            conn.execute("SELECT 1 AS is_alive")
-            return True
-        return False
+            result = conn.execute("SELECT 1 AS is_alive")
+            return result.fetchone()[0] > 0
 
     def create_table(self, table_name, columns_mapping, pk):
         cols = []
