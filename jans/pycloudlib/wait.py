@@ -14,9 +14,6 @@ import backoff
 import ldap3
 import requests
 
-from sqlalchemy import select
-from sqlalchemy import func
-
 from jans.pycloudlib.persistence.couchbase import get_couchbase_user
 from jans.pycloudlib.persistence.couchbase import get_couchbase_password
 from jans.pycloudlib.persistence.couchbase import CouchbaseClient
@@ -360,28 +357,16 @@ def wait_for_sql_conn(manager, **kwargs):
     """Wait for readiness/liveness of an SQL database connection.
     """
     # checking connection
-    SQLClient().is_alive()
+    init = SQLClient().is_alive()
+    if not init:
+        raise WaitError("SQL backend is unreachable")
 
 
 @retry_on_exception
 def wait_for_sql(manager, **kwargs):
     """Wait for readiness/liveness of an SQL database.
     """
-    client = SQLClient()
-    init = False
-
-    table = client.get_table("jansClnt")
-    if table is not None:
-        stmt = select(
-            [func.count()]
-        ).select_from(
-            table
-        ).where(
-            table.c.doc_id == manager.config.get("jca_client_id")
-        )
-        with client.engine.connect() as conn:
-            result = conn.execute(stmt)
-            init = result.fetchone()[0] > 0
+    init = SQLClient().row_exists("jansClnt", manager.config.get("jca_client_id"))
 
     if not init:
         raise WaitError("SQL is not fully initialized")

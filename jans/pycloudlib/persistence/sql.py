@@ -4,24 +4,11 @@ import os
 
 from sqlalchemy import create_engine
 from sqlalchemy import MetaData
-from sqlalchemy import VARCHAR
-from sqlalchemy import TEXT
-from sqlalchemy import INT
-from sqlalchemy import SMALLINT
-from sqlalchemy import TIMESTAMP
-from sqlalchemy import JSON
-from sqlalchemy import BLOB
-from sqlalchemy import BINARY
-from sqlalchemy import Table
-from sqlalchemy import Column
-from sqlalchemy import text
-from sqlalchemy.dialects.mysql import DATETIME
-from sqlalchemy.dialects.mysql import TINYTEXT
-from sqlalchemy.dialects.postgresql import BYTEA
+from sqlalchemy import func
+from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.schema import CreateIndex
-from sqlalchemy.schema import Index
 
 from jans.pycloudlib.utils import encode_text
 
@@ -42,30 +29,244 @@ def get_sql_password() -> str:
     return password
 
 
-def get_type_obj(type_, size=None):
-    if type_ == "VARCHAR":
-        obj = VARCHAR(size)
-    elif type_ == "TEXT":
-        obj = TEXT
-    elif type_ == "SMALLINT":
-        obj = SMALLINT
-    elif type_ == "INT":
-        obj = INT
-    elif type_ == "TIMESTAMP":
-        obj = TIMESTAMP
-    elif type_ == "JSON":
-        obj = JSON
-    elif type_ == "BLOB":
-        obj = BLOB
-    elif type_ == "BINARY":
-        obj = BINARY
-    elif type_ == "BYTEA":
-        obj = BYTEA
-    elif type_ == "DATETIME":
-        obj = DATETIME(fsp=size)
-    elif type_ == "TINYTEXT":
-        obj = TINYTEXT
-    return obj
+class PostgresqlClient:
+    def __init__(self):
+        host = os.environ.get("CN_SQL_DB_HOST", "localhost")
+        port = os.environ.get("CN_SQL_DB_PORT", 5432)
+        database = os.environ.get("CN_SQL_DB_NAME", "jans")
+        user = os.environ.get("CN_SQL_DB_USER", "jans")
+        password = get_sql_password()
+
+        self.engine = create_engine(
+            f"{self.connector}://{user}:{password}@{host}:{port}/{database}",
+            pool_pre_ping=True,
+            hide_parameters=True,
+        )
+        self.metadata = MetaData(bind=self.engine, reflect=True)
+
+    @property
+    def connector(self):
+        """Connector name."""
+
+        return "postgresql+psycopg2"
+
+    def connected(self):
+        """Check whether connection is alive by executing simple query.
+        """
+
+        with self.engine.connect() as conn:
+            result = conn.execute("SELECT 1 AS is_alive")
+            return result.fetchone()[0] > 0
+
+    def create_table(self, table_name: str, column_mapping: dict, pk_column: str):
+        columns = []
+        for column_name, column_type in column_mapping.items():
+            column_def = f"{self.quoted_id(column_name)} {column_type}"
+
+            if column_name == pk_column:
+                column_def += " NOT NULL UNIQUE"
+            columns.append(column_def)
+
+        columns_fmt = ", ".join(columns)
+        pk_def = f"PRIMARY KEY ({self.quoted_id(pk_column)})"
+        query = f"CREATE TABLE {self.quoted_id(table_name)} ({columns_fmt}, {pk_def})"
+
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(query)
+                # refresh metadata as we have newly created table
+                self.metadata.reflect()
+            except ProgrammingError as exc:
+                if exc.orig.pgcode in ["42P07"]:
+                    # error with following code will be suppressed
+                    # - 42P07: relation exists
+                    pass
+                else:
+                    raise
+
+    def create_index(self, index_name: str, table_name: str, column_name: str):
+        query = f"CREATE INDEX {self.quoted_id(index_name)} ON {self.quoted_id(table_name)} ({self.quoted_id(column_name)})"
+        self.create_index_raw(query)
+
+    def create_index_raw(self, query):
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(query)
+            except ProgrammingError as exc:
+                if exc.orig.pgcode in ["42P07"]:
+                    # error with following code will be suppressed
+                    # - 42P07: relation exists
+                    pass
+                else:
+                    raise
+
+    def quoted_id(self, identifier):
+        char = '"'
+        return f"{char}{identifier}{char}"
+
+    def get_table_mapping(self) -> dict:
+        table_mapping = {}
+        for table_name, table in self.metadata.tables.items():
+            table_mapping[table_name] = {
+                column.name: column.type.__class__.__name__
+                for column in table.c
+            }
+        return table_mapping
+
+    def row_exists(self, table_name, where_value):
+        table = self.metadata.tables.get(table_name)
+        if table is None:
+            return False
+
+        query = select([func.count()]).select_from(table).where(
+            table.c.doc_id == where_value
+        )
+        with self.engine.connect() as conn:
+            result = conn.execute(query)
+            return result.fetchone()[0] > 0
+
+    def insert_into(self, table_name, column_mapping):
+        table = self.metadata.tables.get(table_name)
+
+        for column in table.c:
+            unmapped = column.name not in column_mapping
+            is_json = column.type.__class__.__name__.lower() == "json"
+
+            if not all([unmapped, is_json]):
+                continue
+            column_mapping[column.name] = {"v": []}
+
+        query = table.insert().values(column_mapping)
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(query)
+            except IntegrityError as exc:
+                if exc.orig.pgcode in ["23505"]:
+                    # error with following code will be suppressed
+                    # - 23505: unique violation
+                    pass
+                else:
+                    raise
+
+
+class MysqlClient:
+    def __init__(self):
+        host = os.environ.get("CN_SQL_DB_HOST", "localhost")
+        port = os.environ.get("CN_SQL_DB_PORT", 3306)
+        database = os.environ.get("CN_SQL_DB_NAME", "jans")
+        user = os.environ.get("CN_SQL_DB_USER", "jans")
+        password = get_sql_password()
+
+        self.engine = create_engine(
+            f"{self.connector}://{user}:{password}@{host}:{port}/{database}",
+            pool_pre_ping=True,
+            hide_parameters=True,
+        )
+        self.metadata = MetaData(bind=self.engine, reflect=True)
+
+    @property
+    def connector(self):
+        """Connector name."""
+
+        return "mysql+pymysql"
+
+    def connected(self):
+        """Check whether connection is alive by executing simple query.
+        """
+
+        with self.engine.connect() as conn:
+            result = conn.execute("SELECT 1 AS is_alive")
+            return result.fetchone()[0] > 0
+
+    def create_table(self, table_name: str, column_mapping: dict, pk_column: str):
+        columns = []
+        for column_name, column_type in column_mapping.items():
+            column_def = f"{self.quoted_id(column_name)} {column_type}"
+
+            if column_name == pk_column:
+                column_def += " NOT NULL UNIQUE"
+            columns.append(column_def)
+
+        columns_fmt = ", ".join(columns)
+        pk_def = f"PRIMARY KEY ({self.quoted_id(pk_column)})"
+        query = f"CREATE TABLE {self.quoted_id(table_name)} ({columns_fmt}, {pk_def})"
+
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(query)
+                # refresh metadata as we have newly created table
+                self.metadata.reflect()
+            except OperationalError as exc:
+                if exc.orig.args[0] in [1050]:
+                    # error with following code will be suppressed
+                    # - 1050: table exists
+                    pass
+                else:
+                    raise
+
+    def create_index(self, index_name: str, table_name: str, column_name: str):
+        query = f"CREATE INDEX {self.quoted_id(index_name)} ON {self.quoted_id(table_name)} ({self.quoted_id(column_name)})"
+        self.create_index_raw(query)
+
+    def create_index_raw(self, query):
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(query)
+            except OperationalError as exc:
+                if exc.orig.args[0] in [1061]:
+                    # error with following code will be suppressed
+                    # - 1061: duplicate key name (index)
+                    pass
+                else:
+                    raise
+
+    def quoted_id(self, identifier):
+        char = '`'
+        return f"{char}{identifier}{char}"
+
+    def get_table_mapping(self) -> dict:
+        table_mapping = {}
+        for table_name, table in self.metadata.tables.items():
+            table_mapping[table_name] = {
+                column.name: column.type.__class__.__name__
+                for column in table.c
+            }
+        return table_mapping
+
+    def row_exists(self, table_name, where_value):
+        table = self.metadata.tables.get(table_name)
+        if table is None:
+            return False
+
+        query = select([func.count()]).select_from(table).where(
+            table.c.doc_id == where_value
+        )
+        with self.engine.connect() as conn:
+            result = conn.execute(query)
+            return result.fetchone()[0] > 0
+
+    def insert_into(self, table_name, column_mapping):
+        table = self.metadata.tables.get(table_name)
+
+        for column in table.c:
+            unmapped = column.name not in column_mapping
+            is_json = column.type.__class__.__name__.lower() == "json"
+
+            if not all([unmapped, is_json]):
+                continue
+            column_mapping[column.name] = {"v": []}
+
+        query = table.insert().values(column_mapping)
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(query)
+            except IntegrityError as exc:
+                if exc.orig.args[0] in [1062]:
+                    # error with following code will be suppressed
+                    # - 1062: duplicate entry
+                    pass
+                else:
+                    raise
 
 
 class SQLClient:
@@ -74,98 +275,34 @@ class SQLClient:
 
     def __init__(self):
         dialect = os.environ.get("CN_SQL_DB_DIALECT", "mysql")
-        host = os.environ.get("CN_SQL_DB_HOST", "localhost")
-        port = os.environ.get("CN_SQL_DB_PORT", 3306)
-        database = os.environ.get("CN_SQL_DB_NAME", "jans")
-        user = os.environ.get("CN_SQL_DB_USER", "jans")
-        password = get_sql_password()
-
-        if dialect == "mysql":
-            connector = "mysql+pymysql"
-        else:
-            connector = "postgresql+psycopg2"
-
-        self.engine = create_engine(
-            f"{connector}://{user}:{password}@{host}:{port}/{database}",
-            pool_pre_ping=True,
-            hide_parameters=True,
-        )
-        self.metadata = MetaData(bind=self.engine, reflect=True)
+        if dialect in ("pgsql", "postgresql"):
+            self.adapter = PostgresqlClient()
+        elif dialect == "mysql":
+            self.adapter = MysqlClient()
 
     def is_alive(self):
-        """Check whether connection is alive by executing simple query.
-        """
-
-        with self.engine.connect() as conn:
-            result = conn.execute("SELECT 1 AS is_alive")
-            return result.fetchone()[0] > 0
+        return self.adapter.connected()
 
     def create_table(self, table_name, columns_mapping, pk):
-        cols = []
+        return self.adapter.create_table(table_name, columns_mapping, pk)
 
-        for column_name, data_type in columns_mapping.items():
-            types = data_type.split("(")
+    def get_table_mapping(self):
+        return self.adapter.get_table_mapping()
 
-            if len(types) == 2:
-                type_ = types[0]
-                size = int(types[1].strip("()"))
-            else:
-                type_ = types[0]
-                size = None
+    def create_index_raw(self, query):
+        return self.adapter.create_index_raw(query)
 
-            is_pkey = bool(column_name == pk)
-            type_obj = get_type_obj(type_, size)
-            cols.append(Column(column_name, type_obj, primary_key=is_pkey))
+    def create_index(self, index_name, table_name, column_name):
+        return self.adapter.create_index(index_name, table_name, column_name)
 
-        table = Table(
-            table_name,
-            self.metadata,
-            *cols,
-            extend_existing=True
-        )
+    def quoted_id(self, identifier):
+        return self.adapter.quoted_id(identifier)
 
-        try:
-            table.create(self.engine)
-        except (ProgrammingError, OperationalError) as exc:
-            dialect = self.engine.dialect.name
+    def row_exists(self, table_name, where_value):
+        return self.adapter.row_exists(table_name, where_value)
 
-            if dialect == "postgresql" and exc.orig.pgcode in ["42P07"]:
-                # error with following code will be suppressed
-                # - 42P07: relation exists
-                pass
-            elif dialect == "mysql" and exc.orig.args[0] in [1050]:
-                # error with following code will be suppressed
-                # - 1050: table exists
-                pass
-            else:
-                logger.warning(f"Unable to create table {table_name}; reason={exc}")
-
-    def get_table(self, table_name):
-        return self.metadata.tables.get(table_name)
-
-    def create_index(self, name, column):
-        index = Index(name, column)
-
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(CreateIndex(index))
-            except (ProgrammingError, OperationalError) as exc:
-                dialect = self.engine.dialect.name
-
-                if dialect == "postgresql" and exc.orig.pgcode in ["42P07"]:
-                    # error with following code will be suppressed
-                    # - 42P07: relation exists
-                    pass
-                elif dialect == "mysql" and exc.orig.args[0] in [1061]:
-                    # error with following code will be suppressed
-                    # - 1061: duplicate key name (index)
-                    pass
-                else:
-                    logger.warning(f"Unable to create index {name}; reason={exc}")
-
-    def raw_query(self, query, **prepared_data):
-        with self.engine.connect() as conn:
-            conn.execute(text(query), **prepared_data)
+    def insert_into(self, table_name, column_mapping):
+        return self.adapter.insert_into(table_name, column_mapping)
 
 
 def render_sql_properties(manager, src: str, dest: str) -> None:
