@@ -25,4 +25,5 @@ PERSISTENCE_LDAP_MAPPINGS = (
 PERSISTENCE_SQL_DIALECTS = (
     "mysql",
     "pgsql",
+    "spanner",
 )
