@@ -87,11 +87,7 @@ class PostgresqlClient:
                 else:
                     raise
 
-    def create_index(self, index_name: str, table_name: str, column_name: str):
-        query = f"CREATE INDEX {self.quoted_id(index_name)} ON {self.quoted_id(table_name)} ({self.quoted_id(column_name)})"
-        self.create_index_raw(query)
-
-    def create_index_raw(self, query):
+    def create_index(self, query):
         with self.engine.connect() as conn:
             try:
                 conn.execute(query)
@@ -207,11 +203,7 @@ class MysqlClient:
                 else:
                     raise
 
-    def create_index(self, index_name: str, table_name: str, column_name: str):
-        query = f"CREATE INDEX {self.quoted_id(index_name)} ON {self.quoted_id(table_name)} ({self.quoted_id(column_name)})"
-        self.create_index_raw(query)
-
-    def create_index_raw(self, query):
+    def create_index(self, query):
         with self.engine.connect() as conn:
             try:
                 conn.execute(query)
@@ -298,6 +290,9 @@ class SpannerClient:
         columns = []
         for column_name, column_type in column_mapping.items():
             column_def = f"{self.quoted_id(column_name)} {column_type}"
+
+            if column_name == pk_column:
+                column_def += " NOT NULL"
             columns.append(column_def)
 
         columns_fmt = ", ".join(columns)
@@ -318,10 +313,24 @@ class SpannerClient:
         return f"{char}{identifier}{char}"
 
     def get_table_mapping(self) -> dict:
+        type_code = (
+            "TYPE_CODE_UNSPECIFIED",
+            "BOOL",
+            "INT64",
+            "FLOAT64",
+            "TIMESTAMP",
+            "DATE",
+            "STRING",
+            "BYTES",
+            "ARRAY",
+            "STRUCT",
+            "NUMERIC",
+        )
+
         def parse_field_type(type_):
-            name = type_.code.name
-            if name == "ARRAY":
-                name = f"{name}<{type_.array_element_type.code.name}>"
+            name = type_code[type_.code]
+            # if name == "ARRAY":
+            #     name = f"{name}<{type_code(type_.array_element_type.code)}>"
             return name
 
         table_mapping = {}
@@ -361,11 +370,15 @@ class SpannerClient:
                 break
         return exists
 
-    def create_index(self, index_name: str, table_name: str, column_name: str):
-        raise NotImplementedError
-
-    def create_index_raw(self, query):
-        raise NotImplementedError
+    def create_index(self, query):
+        try:
+            self.database.update_ddl([query])
+        except FailedPrecondition as exc:
+            if "Duplicate name in schema" in exc.args[0]:
+                # table exists
+                pass
+            else:
+                raise
 
 
 class SQLClient:
@@ -394,11 +407,8 @@ class SQLClient:
     def get_table_mapping(self):
         return self.adapter.get_table_mapping()
 
-    def create_index_raw(self, query):
-        return self.adapter.create_index_raw(query)
-
-    def create_index(self, index_name, table_name, column_name):
-        return self.adapter.create_index(index_name, table_name, column_name)
+    def create_index(self, query):
+        return self.adapter.create_index(query)
 
     def quoted_id(self, identifier):
         return self.adapter.quoted_id(identifier)
