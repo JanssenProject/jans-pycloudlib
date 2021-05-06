@@ -10,6 +10,7 @@ PERSISTENCE_TYPES = (
     "couchbase",
     "hybrid",
     "sql",
+    "spanner",
 )
 
 PERSISTENCE_LDAP_MAPPINGS = (
@@ -25,5 +26,4 @@ PERSISTENCE_LDAP_MAPPINGS = (
 PERSISTENCE_SQL_DIALECTS = (
     "mysql",
     "pgsql",
-    "spanner",
 )

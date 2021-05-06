@@ -18,6 +18,7 @@ from jans.pycloudlib.persistence.couchbase import get_couchbase_user
 from jans.pycloudlib.persistence.couchbase import get_couchbase_password
 from jans.pycloudlib.persistence.couchbase import CouchbaseClient
 from jans.pycloudlib.persistence.sql import SQLClient
+from jans.pycloudlib.persistence.spanner import SpannerClient
 from jans.pycloudlib.utils import as_boolean
 from jans.pycloudlib.utils import decode_text
 
@@ -357,7 +358,7 @@ def wait_for_sql_conn(manager, **kwargs):
     """Wait for readiness/liveness of an SQL database connection.
     """
     # checking connection
-    init = SQLClient().is_alive()
+    init = SQLClient().connected()
     if not init:
         raise WaitError("SQL backend is unreachable")
 
@@ -370,6 +371,26 @@ def wait_for_sql(manager, **kwargs):
 
     if not init:
         raise WaitError("SQL is not fully initialized")
+
+
+@retry_on_exception
+def wait_for_spanner_conn(manager, **kwargs):
+    """Wait for readiness/liveness of an Spanner database connection.
+    """
+    # checking connection
+    init = SpannerClient().connected()
+    if not init:
+        raise WaitError("Spanner backend is unreachable")
+
+
+@retry_on_exception
+def wait_for_spanner(manager, **kwargs):
+    """Wait for readiness/liveness of an Spanner database.
+    """
+    init = SpannerClient().row_exists("jansClnt", manager.config.get("jca_client_id"))
+
+    if not init:
+        raise WaitError("Spanner is not fully initialized")
 
 
 def wait_for(manager, deps=None):
@@ -390,6 +411,8 @@ def wait_for(manager, deps=None):
     - `oxd`
     - `sql`
     - `sql_conn`
+    - `spanner`
+    - `spanner_conn`
 
     .. code-block:: python
 
@@ -427,6 +450,8 @@ def wait_for(manager, deps=None):
         "oxd": {"func": wait_for_oxd, "kwargs": {"label": "oxd"}},
         "sql_conn": {"func": wait_for_sql_conn, "kwargs": {"label": "SQL"}},
         "sql": {"func": wait_for_sql, "kwargs": {"label": "SQL"}},
+        "spanner_conn": {"func": wait_for_spanner_conn, "kwargs": {"label": "Spanner"}},
+        "spanner": {"func": wait_for_spanner, "kwargs": {"label": "Spanner"}},
     }
 
     for dep in deps:
